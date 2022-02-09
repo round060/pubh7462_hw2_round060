@@ -1,0 +1,157 @@
+---
+title: "Homework 2"
+author: "Christopher Rounds"
+date: "2/5/2022"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(gt)
+
+#Working directory for .RMD
+knitr::opts_knit$set(echo = TRUE,
+                     root.dir = rprojroot::find_rstudio_root_file())
+
+#Set Theme for ggplot2
+#theme_set(theme_bw() + theme(plot.title = element_text(hjust = 0.5), legend.position = "bottom"))
+
+#Set Scientific notation output and decimal places for knitr
+options(scipen = 999)
+options(digits = 4)
+```
+
+
+# BRFSS SMART data 2002-2010
+```{r }
+data <- read.csv("./data/brfss_smart_2010.csv")
+
+clean_data <- data %>%
+  janitor::clean_names() %>%
+  filter(topic == "Overall Health") %>%
+  rename(state = locationabbr) %>%
+  mutate(county = str_split(locationdesc, '-', simplify = TRUE)[,2], 
+         prop_responses = data_value/100, # turn percent responses into proportion
+         state = as.factor(state), # convert variables to factors when appropriate
+         county = as.factor(county),
+         response = as.factor(response)) %>%
+  dplyr::select(year, state, county, response, sample_size, prop_responses) 
+  # chose the variables we are interested in
+
+variables <- names(clean_data) #placeholder for describing variables with inline r
+```
+# Data description
+Our filtered data set has `r nrow(clean_data)` observations with `r length(clean_data)` variables. Each row is the number of survey respondents that were classified at the given response level for the given state, county and year. The first variable (`r variables[1]`) corresponds to the year of the survey, `r variables[2]` is the state in which the survey occurred, similarly `r variables[3]` is the county that the survey occurred, `r variables[4]` is a factor variable with 5 values ranging from Excellent to Poor, `r variables[5]` is the number of survey respondents that were classified with that response, finally `r variables[6]` is the proportion of responses that were at the associated response level.  
+
+
+# 3.3.1) States with six locations in 2004
+```{r sixobservations}
+six_obs <- clean_data %>%
+  dplyr::filter(year == 2004) %>% #filter to 2004
+  group_by(state) %>%
+  distinct(county) %>% 
+  count() %>% # these 3 lines give the number of observations in every state
+  filter(n == 6) %>% # but we only want the state with 6 observations
+  dplyr::select(state) # use inline r to mention the states 
+
+```
+There are eight states that had six different locations in the year 2004. These states are `r six_obs[1,]`, `r six_obs[2,]`, `r six_obs[3,]`, `r six_obs[4,]`, `r six_obs[5,]`, `r six_obs[6,]`, `r six_obs[7,]`, and `r six_obs[8,]`.  
+
+# 3.3.2) Observed locations in each state from 2002 to 2010
+```{r spaghetti}
+temp = clean_data %>%
+  group_by(state, year) %>% # create our groups of staes over year
+  distinct(county) %>% # how many counties per year in each state
+  count() %>% # count em up!
+  ungroup() %>% # ungroup so we can reorder the states
+  mutate(state = fct_reorder(as.factor(state), n, mean, .desc = TRUE))
+  # order the states by the mean number of observations in descending order
+
+basic_model <- lm(n ~ year, data = temp)
+temp %>%  # pretty explanatory, plot the data!
+  ggplot(aes(x = year, y = n, colour = state)) +
+  geom_line() +
+   geom_abline(slope = coef(basic_model)[["year"]], 
+              intercept = coef(basic_model)[["(Intercept)"]], 
+              size = 1.5, colour = "black") +
+  ylab("Year") +
+  xlab("Number of sites") +
+  ggtitle("Number of sites per state from 2002-2010") +
+  labs(colour = "State") +
+  theme(legend.position = 'right')
+
+```
+  
+  
+There is a lot of information here so it is semi difficult to see what is going on but I will do my best to explain. It looks like generally there is a slight increase in the amount of testing sites per state as time passes. This can be seen with the black linear regression line having a slightly positive slope. Some states have a really high number of sites in some years but lower numbers in subsequent years. For example, Florida (FL) has over 40 sites in 2007 and 2010 and less than 10 sites every other year. New Jersey (NJ) has the largest mean number of sites and you can see the state steadily has more than 10 sites.  
+
+# 3.3.3) Minnesota data from 2002, 2006 and 2010
+```{r MN, warning = FALSE, message = FALSE}
+
+mn_data <- clean_data %>%
+  dplyr::filter(state == "MN") %>% # chose the state
+  dplyr::filter(year == 2002 | year == 2006 | year == 2010) %>% #and the years
+  dplyr::filter(response == "Excellent" | 
+                response == "Good" | 
+                response == "Poor") %>% # and finally the responses we want
+  group_by(year, response) %>%
+  summarise(across(contains("_"), # with variables that have a _ calculate mean and sd
+                   list(mean = mean, sd = sd),
+                   na.rm = TRUE, .names = "{.col}_{.fn}")) 
+mn_data %>%
+  gt() %>%
+  tab_header("Summary of responses across MN counties") %>%
+  as_raw_html() #If I don't include this line I get HTML output in my github_document
+  
+```
+  
+  
+We can see that generally people in Minnesota are classified as good with excellent in a close second. Very few people fall into the poor category. The trend of proportion of responses are stable over the 8 years of this data. The sample size mean and standard deviation greatly increase in the year 2010 (more than doubles for sd and almost doubles for response mean). This is due to an increase in respondents in 2010 over other years.  
+
+# 3.3.4) Plot of Minnesota data from 2002, 2006 and 2010
+```{r MNplot}
+mn_data %>%
+  rename("Sample size mean" = sample_size_mean,
+         "Mean proportion of responses" = prop_responses_mean,
+         "Sample size SD" = sample_size_sd,
+         "SD proportion of responses" = prop_responses_sd) %>%
+  pivot_longer(-c(year, response), names_to = "measurement", values_to = "value") %>% 
+  # change back to long format for ggplot
+  mutate(measurement = as.factor(measurement)) %>%
+  # change from char to factor
+  ggplot(aes(x = year, y = value, colour = response)) +
+  geom_point() +
+  geom_line() +
+  facet_wrap(. ~ measurement, scales = "free_y") + # 2 grids separated by the measurement type
+  labs(title = "Change in response type over time", y = "Value", x = "Year") +
+  scale_colour_manual(name = "Response", 
+                    values = c("Excellent" = "green", "Good" = "black", "Poor" = "red"), 
+                    labels = c("Excellent", "Good", "Poor"))
+
+  
+```
+
+# Plot of Minnesota data from 2002, 2006 and 2010 with standard deviation
+```{r MNplotwSD}
+mn_data %>%
+  pivot_longer(-c(year, response), names_to = "measurement", values_to = "value") %>% 
+  # change back to long format for ggplot
+  mutate(measurement = as.factor(measurement)) %>%
+  # change from char to factor
+  dplyr::filter(measurement == "sample_size_mean" | measurement == "prop_responses_mean") %>% 
+  #Don't include the sds, makes the graph easier to look at
+  mutate(measurement = 
+           ifelse(measurement == "sample_size_mean", 
+                  "Sample size mean", "Mean proportion of responses")) %>% # change measurement names
+  ggplot(aes(x = year, y = value, colour = response)) +
+  geom_point() +
+  geom_line() +
+  facet_wrap(. ~ measurement, scales = "free_y") + # 2 grids seperated by the measurement type
+  labs(title = "Change in response type over time", y = "Value", x = "Year") +
+  scale_colour_manual(name = "Response", 
+                    values = c("Excellent" = "green", "Good" = "black", "Poor" = "red"), 
+                    labels = c("Excellent", "Good", "Poor"))
+
+  
+```
+
